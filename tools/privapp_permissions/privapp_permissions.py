@@ -38,7 +38,7 @@ Generates privapp-permissions.xml file for priv-apps.
 Usage:
     Specify which apk to generate priv-app permissions for. If no apk is \
 specified, this will default to all APKs under "<ANDROID_PRODUCT_OUT>/ \
-system/priv-app and (system/)product/priv-app".
+system/priv-app".
 
 Examples:
 
@@ -156,18 +156,9 @@ class Resources(object):
                 'You must either set up your build environment, or specify a '
                 'device to run against. See --help for more info.')
 
-        self.system_privapp_apks, self.product_privapp_apks = \
-                self._resolve_apks(apks)
-        self.system_permissions_dir = \
-                self._resolve_sys_path('system/etc/permissions')
-        self.system_sysconfig_dir = \
-                self._resolve_sys_path('system/etc/sysconfig')
-        self.product_permissions_dir = \
-                self._resolve_sys_path('product/etc/permissions',
-                                       'system/product/etc/permissions')
-        self.product_sysconfig_dir = \
-                self._resolve_sys_path('product/etc/sysconfig',
-                                       'system/product/etc/sysconfig')
+        self.privapp_apks = self._resolve_apks(apks)
+        self.permissions_dir = self._resolve_sys_path('system/etc/permissions')
+        self.sysconfig_dir = self._resolve_sys_path('system/etc/sysconfig')
         self.framework_res_apk = self._resolve_sys_path('system/framework/'
                                                         'framework-res.apk')
 
@@ -298,8 +289,7 @@ class Resources(object):
             be found.
         """
         if not apks:
-            return self._resolve_all_system_privapps(), \
-                   self._resolve_all_product_privapps()
+            return self._resolve_all_privapps()
 
         ret_apks = []
         for apk in apks:
@@ -316,76 +306,29 @@ class Resources(object):
                 raise MissingResourceError('File "%s" does not exist.' % apk)
             else:
                 ret_apks.append(apk)
-        return ret_apks, None
+        return ret_apks
 
-    def _resolve_all_system_privapps(self):
+    def _resolve_all_privapps(self):
         """Extract package name and requested permissions."""
         if self._is_android_env:
-            system_priv_app_dir = \
-                    os.path.join(os.environ['ANDROID_PRODUCT_OUT'],
-                                            'system/priv-app')
+            priv_app_dir = os.path.join(os.environ['ANDROID_PRODUCT_OUT'],
+                                        'system/priv-app')
         else:
             try:
-                system_priv_app_dir = self.adb.pull('/system/priv-app/')
+                priv_app_dir = self.adb.pull('/system/priv-app/')
             except subprocess.CalledProcessError:
                 raise MissingResourceError(
                     'Directory "/system/priv-app" could not be pulled from on '
                     'device "%s".' % self.adb.serial)
 
-        return get_output('find %s -name "*.apk"' % system_priv_app_dir).split()
+        return get_output('find %s -name "*.apk"' % priv_app_dir).split()
 
-    def _resolve_all_product_privapps(self):
-        """Extract package name and requested permissions."""
-        if self._is_android_env:
-            product_priv_app_dir = \
-                    os.path.join(os.environ['ANDROID_PRODUCT_OUT'],
-                                            'product/priv-app')
-            if not os.path.exists(product_priv_app_dir):
-                product_priv_app_dir  = \
-                        os.path.join(os.environ['ANDROID_PRODUCT_OUT'],
-                                                'system/product/priv-app')
-        else:
-            try:
-                product_priv_app_dir = self.adb.pull('/product/priv-app/')
-            except subprocess.CalledProcessError:
-                print('Directory "/product/priv-app" could not be pulled from '
-                        'on device "%s". Trying "/system/product/priv-app"'
-                        % self.adb.serial)
-                try:
-                    product_priv_app_dir = \
-                            self.adb.pull('/system/product/priv-app/')
-                except subprocess.CalledProcessError:
-                    raise MissingResourceError(
-                        'Directory "/system/product/priv-app" could not be '
-                        'pulled from on device "%s".' % self.adb.serial)
-
-        return get_output(
-                'find %s -name "*.apk"' % product_priv_app_dir).split()
-
-    def _resolve_sys_path(self, file_path, fallback_file_path=None):
+    def _resolve_sys_path(self, file_path):
         """Resolves a path that is a part of an Android System Image."""
         if self._is_android_env:
-            sys_path = \
-                    os.path.join(os.environ['ANDROID_PRODUCT_OUT'], file_path)
-            if not os.path.exists(sys_path):
-                sys_path = \
-                        os.path.join(os.environ['ANDROID_PRODUCT_OUT'],
-                        fallback_file_path)
+            return os.path.join(os.environ['ANDROID_PRODUCT_OUT'], file_path)
         else:
-            try:
-                sys_path = self.adb.pull(file_path)
-            except subprocess.CalledProcessError:
-                print('Directory %s could not be pulled from on '
-                        'device "%s". Trying "/system/product/priv-app"'
-                        % (file_path, self.adb.serial))
-                try:
-                    sys_path = self.adb.pull(fallback_file_path)
-                except subprocess.CalledProcessError:
-                    raise MissingResourceError(
-                        'Directory %s could not be pulled from on '
-                        'device "%s".' % (fallback_file_path, self.adb.serial))
-
-        return sys_path
+            return self.adb.pull(file_path)
 
 
 def get_output(command):
@@ -451,13 +394,13 @@ def parse_args():
 
     return cmd_args
 
-def create_permission_file(resources, privapp_apks, permissions_dir,
-            sysconfig_dir):
+
+def create_permission_file(resources):
     # Parse base XML files in /etc dir, permissions listed there don't have
     # to be re-added
     base_permissions = {}
-    base_xml_files = itertools.chain(list_xml_files(permissions_dir),
-                                     list_xml_files(sysconfig_dir))
+    base_xml_files = itertools.chain(list_xml_files(resources.permissions_dir),
+                                     list_xml_files(resources.sysconfig_dir))
     for xml_file in base_xml_files:
         parse_config_xml(xml_file, base_permissions)
 
@@ -466,7 +409,7 @@ def create_permission_file(resources, privapp_apks, permissions_dir,
 
     apps_redefine_base = []
     results = {}
-    for priv_app in privapp_apks:
+    for priv_app in resources.privapp_apks:
         pkg_info = extract_pkg_and_requested_permissions(resources.aapt,
                                                          priv_app)
         pkg_name = pkg_info['package_name']
@@ -483,6 +426,7 @@ def create_permission_file(resources, privapp_apks, permissions_dir,
             results[pkg_name] = sorted(priv_perms)
 
     print_xml(results, apps_redefine_base)
+
 
 def print_xml(results, apps_redefine_base, fd=sys.stdout):
     """Print results to the given file."""
@@ -628,27 +572,7 @@ if __name__ == '__main__':
             serial=args.serial,
             apks=args.apks
         )
-        print('#' * 80)
-        print('#')
-        print('#System XML:')
-        print('#')
-        print('#' * 80)
-        create_permission_file(
-            tool_resources,
-            tool_resources.system_privapp_apks,
-            tool_resources.system_permissions_dir,
-            tool_resources.system_sysconfig_dir)
-        if tool_resources.product_privapp_apks:
-            print('#' * 80)
-            print('#')
-            print('#Product XML:')
-            print('#')
-            print('#' * 80)
-            create_permission_file(
-                tool_resources,
-                tool_resources.product_privapp_apks,
-                tool_resources.product_permissions_dir,
-                tool_resources.product_sysconfig_dir)
+        create_permission_file(tool_resources)
     except MissingResourceError as e:
         print(str(e), file=sys.stderr)
         exit(1)
